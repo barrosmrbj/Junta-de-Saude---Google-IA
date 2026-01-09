@@ -1,119 +1,127 @@
 
 /**
- * Main Controller for Health Inspection Sheets
+ * GERADOR DE FICHAS DE INSPEÇÃO DE SAÚDE
+ * Desenvolvido para integração com APIs externas de Fichas e Inspecionados.
  */
 
 const CONFIG = {
   SS: SpreadsheetApp.getActiveSpreadsheet(),
-  URL_FICHAS_HOJE: "https://docs.google.com/spreadsheets/d/1CWXzs_J1tTITIZ52_0t02tUb8tBewKSBNWNyaHb6z8M/edit?gid=350819832#gid=350819832",
-  URL_BANCO_ARQUIVOS: "https://docs.google.com/spreadsheets/d/1s41r4hqE0qUgs7i49klZEMjtQXrXDko1gJpi2Hq9ZtE/edit?gid=1185443922#gid=1185443922"
+  // API que retorna as fichas (Aba FICHAS)
+  API_FICHAS: "https://script.google.com/macros/s/AKfycbzKbu1m8zsQfaqUXyufwVqNmxQRw0pHOo6H528muJ3FIm49zonO537amN309LuRhz52Dw/exec",
+  // API que retorna os dados dos inspecionados (para busca de Nº do Arquivo/Prontuário)
+  API_INSPECIONADOS: "https://script.google.com/macros/s/AKfycbzydoxvSMbWIJvCktWSdzEhP6g5dC_Wh7e5PqID-D1qJCMNVe8cnGCVrnZwWdtJH20/exec"
 };
 
 /**
- * Serves the UI
+ * Função principal para servir a interface ou responder como API JSON.
  */
-function doGet() {
+function doGet(e) {
+  // Se o parâmetro "action" for "data", retorna o JSON das inspeções do dia
+  if (e && e.parameter && e.parameter.action === 'data') {
+    const data = getPendingInspections();
+    return ContentService.createTextOutput(JSON.stringify(data))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  // Caso contrário, serve a interface HTML do React
   return HtmlService.createHtmlOutputFromFile('index.html')
     .setTitle('Gerador de Fichas de Saúde')
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
 
 /**
- * Fetches data from external "FICHAS" sheet, filtered by today's date
+ * Helper para buscar dados de APIs externas via GET.
  */
-function getPendingInspections() {
+function fetchFromApi(url) {
   try {
-    const ssExternal = SpreadsheetApp.openByUrl(CONFIG.URL_FICHAS_HOJE);
-    const sheet = ssExternal.getSheetByName("FICHAS");
-    if (!sheet) return { inspections: [], stats: { totalFichas: 0, uniqueInspecionandos: 0, homens: 0, mulheres: 0 }, printUrl: "" };
-    
-    const values = sheet.getDataRange().getValues();
-    if (values.length <= 1) return { inspections: [], stats: { totalFichas: 0, uniqueInspecionandos: 0, homens: 0, mulheres: 0 }, printUrl: "" };
-    
-    const rows = values.slice(1);
-    const todayStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd/MM/yyyy");
-    
-    const uniqueCpfs = new Set();
-    let homens = 0;
-    let mulheres = 0;
-    
-    const inspections = rows.map((row, index) => {
-      const dtInspVal = formatValue(row[0]);
-      // Only process if it matches today or if user wants all (prompt said "of the day")
-      if (dtInspVal !== todayStr && row[0] !== "") {
-         // Optionally skip, but usually for debugging we might show all. 
-         // Let's stick to the request: "buscar as fichas somente do dia"
-         // return null; 
-      }
-
-      const dtNasc = row[4] instanceof Date ? row[4] : new Date(row[4]);
-      let age = 0;
-      if (!isNaN(dtNasc.getTime())) {
-        const today = new Date();
-        age = today.getFullYear() - dtNasc.getFullYear();
-        const m = today.getMonth() - dtNasc.getMonth();
-        if (m < 0 || (m === 0 && today.getDate() < dtNasc.getDate())) age--;
-      }
-
-      const cpf = String(row[6]).replace(/\D/g, '').padStart(11, '0');
-      const sexo = String(row[7]).toUpperCase();
-      
-      uniqueCpfs.add(cpf);
-      if (sexo.includes("MASC") || sexo === "M") homens++;
-      else if (sexo.includes("FEM") || sexo === "F") mulheres++;
-
-      return {
-        dtInsp: dtInspVal,
-        codInsp: row[1],
-        rg: row[2],
-        dtNascimento: formatValue(row[4]),
-        cpf: cpf,
-        sexo: sexo,
-        nome: row[11],
-        om: row[13],
-        posto: row[8],
-        quadro: row[9],
-        especialidade: row[10],
-        dtPraca: formatValue(row[14]),
-        originalIndex: index + 2, // Row in the external sheet
-        vinculo: row[15],
-        finalidade: row[16],
-        grupo: row[20],
-        idade: age,
-        controle: row[41] || row[37] || "" 
-      };
-    }).filter(item => item !== null && item.dtInsp === todayStr);
-
-    const stats = {
-      totalFichas: inspections.length,
-      uniqueInspecionandos: uniqueCpfs.size,
-      homens: homens,
-      mulheres: mulheres
-    };
-
-    return { 
-      inspections, 
-      stats,
-      printUrl: getPrintUrl()
-    };
-  } catch (e) {
-    Logger.log("Error fetching inspections: " + e.message);
-    throw new Error("Erro ao acessar banco de fichas externo.");
+    const response = UrlFetchApp.fetch(url, {
+      method: "get",
+      followRedirects: true,
+      muteHttpExceptions: true
+    });
+    if (response.getResponseCode() !== 200) return null;
+    const content = response.getContentText();
+    return JSON.parse(content);
+  } catch (err) {
+    Logger.log("Erro ao acessar API: " + url + " - " + err.message);
+    return null;
   }
 }
 
 /**
- * Returns a URL for the IMPRESSAO sheet in PDF/Print mode
+ * Busca as fichas da API externa e filtra somente as do dia atual.
  */
-function getPrintUrl() {
-  const ss = CONFIG.SS;
-  const sheet = ss.getSheetByName("IMPRESSAO");
-  if (!sheet) return "";
-  return `${ss.getUrl()}#gid=${sheet.getSheetId()}`;
+function getPendingInspections() {
+  const result = fetchFromApi(CONFIG.API_FICHAS);
+  const rows = Array.isArray(result) ? result : (result?.data || []);
+  
+  if (rows.length === 0) return { inspections: [], stats: { totalFichas: 0, uniqueInspecionandos: 0, homens: 0, mulheres: 0 }, printUrl: "" };
+
+  const todayStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd/MM/yyyy");
+  const uniqueCpfs = new Set();
+  let homens = 0;
+  let mulheres = 0;
+
+  // O cabeçalho é removido e os dados mapeados
+  const inspections = rows.slice(1).map((row, index) => {
+    const dtInsp = formatValue(row[0]);
+    
+    // Filtro rigoroso: Somente fichas do dia
+    if (dtInsp !== todayStr) return null;
+
+    const cpf = String(row[6] || "").replace(/\D/g, '').padStart(11, '0');
+    const sexo = String(row[7] || "").toUpperCase();
+    const dtNasc = row[4] instanceof Date ? row[4] : new Date(row[4]);
+    
+    let age = 0;
+    if (!isNaN(dtNasc.getTime())) {
+      const today = new Date();
+      age = today.getFullYear() - dtNasc.getFullYear();
+      const m = today.getMonth() - dtNasc.getMonth();
+      if (m < 0 || (m === 0 && today.getDate() < dtNasc.getDate())) age--;
+    }
+
+    if (cpf) uniqueCpfs.add(cpf);
+    if (sexo.includes("MASC") || sexo === "M") homens++;
+    else if (sexo.includes("FEM") || sexo === "F") mulheres++;
+
+    return {
+      dtInsp: dtInsp,
+      codInsp: row[1],
+      rg: row[2],
+      dtNascimento: formatValue(row[4]),
+      cpf: cpf,
+      sexo: sexo,
+      nome: row[11],
+      om: row[13],
+      posto: row[8],
+      quadro: row[9],
+      especialidade: row[10],
+      dtPraca: formatValue(row[14]),
+      originalIndex: index + 2, // Índice da linha original para processamento
+      vinculo: row[15],
+      finalidade: row[16],
+      grupo: row[20],
+      idade: age,
+      controle: row[41] || row[37] || ""
+    };
+  }).filter(item => item !== null);
+
+  return {
+    inspections,
+    stats: {
+      totalFichas: inspections.length,
+      uniqueInspecionandos: uniqueCpfs.size,
+      homens: homens,
+      mulheres: mulheres
+    },
+    printUrl: getPrintUrl()
+  };
 }
 
 /**
- * Main action to generate fichas for selected row indices from EXTERNAL sheet
+ * Gera as fichas na aba IMPRESSAO local.
  */
 function generateFichasAction(selectedIndices) {
   const ss = CONFIG.SS;
@@ -121,158 +129,115 @@ function generateFichasAction(selectedIndices) {
   const sheetImpressao = ss.getSheetByName("IMPRESSAO");
   
   if (!sheetTemplate || !sheetImpressao) {
-    return { success: false, message: "Abas TEMPLATE ou IMPRESSAO não encontradas." };
+    return { success: false, message: "Abas TEMPLATE ou IMPRESSAO não encontradas neste arquivo." };
   }
-  
+
   sheetImpressao.clear();
   let currentRow = 1;
+
+  // Busca dados atualizados para processamento
+  const fichasApi = fetchFromApi(CONFIG.API_FICHAS);
+  const fichas = Array.isArray(fichasApi) ? fichasApi : (fichasApi?.data || []);
   
-  const ssExternal = SpreadsheetApp.openByUrl(CONFIG.URL_FICHAS_HOJE);
-  const sheetExternal = ssExternal.getSheetByName("FICHAS");
-  const allData = sheetExternal.getDataRange().getValues();
-  const archiveCache = loadArchiveCache();
-  
-  selectedIndices.sort((a, b) => a - b).forEach((rowIndex) => {
-    const dataRow = allData[rowIndex - 1]; 
-    processRow(dataRow, sheetTemplate, sheetImpressao, currentRow, archiveCache);
-    currentRow += 64; 
+  const inspecionadosApi = fetchFromApi(CONFIG.API_INSPECIONADOS);
+  const inspecionados = Array.isArray(inspecionadosApi) ? inspecionadosApi : (inspecionadosApi?.data || []);
+
+  // Cache para busca rápida do Nº do Arquivo (CPF na Coluna E[4], Arquivo na Coluna F[5])
+  const archiveCache = {};
+  inspecionados.forEach(row => {
+    const cpf = String(row[4] || "").replace(/\D/g, '').padStart(11, '0');
+    const arquivo = row[5];
+    if (cpf && arquivo) archiveCache[cpf] = arquivo;
   });
-  
-  return { 
-    success: true, 
-    message: `Sucesso! ${selectedIndices.length} ficha(s) gerada(s).`,
+
+  selectedIndices.sort((a, b) => a - b).forEach(idx => {
+    const rowData = fichas[idx - 1]; // Ajuste para 0-indexed do array
+    if (rowData) {
+      populateTemplate(rowData, sheetTemplate, sheetImpressao, currentRow, archiveCache);
+      currentRow += 64;
+    }
+  });
+
+  return {
+    success: true,
+    message: `${selectedIndices.length} fichas geradas com sucesso!`,
     printUrl: getPrintUrl()
   };
 }
 
 /**
- * Processes a single row: calculates data and populates template
+ * Preenche o template e copia para a aba de impressão.
  */
-function processRow(row, template, target, startRow, archiveCache) {
+function populateTemplate(row, template, target, startRow, archiveCache) {
+  // Limpezas prévias
   template.getRange("S4").clearContent(); 
   template.getRange("Q4").clearContent(); 
-  template.getRange("N1").clearContent(); 
+  template.getRange("N1").clearContent();
 
-  const codInsp = row[1];
+  const cpf = String(row[6] || "").replace(/\D/g, '').padStart(11, '0');
   const dtNasc = row[4] instanceof Date ? row[4] : new Date(row[4]);
-  const naturalidade = row[5];
-  const cpf = String(row[6]).replace(/\D/g, '').padStart(11, '0');
-  const sexo = row[7];
+  const dtPraca = row[14] instanceof Date ? row[14] : new Date(row[14]);
+  const om = row[13];
   const posto = row[8];
   const quadro = row[9];
-  const especialidade = row[10];
-  const nome = row[11];
-  const saram = row[12];
-  const om = row[13];
-  const dtPraca = row[14] instanceof Date ? row[14] : null;
-  const email = row[17];
-  const endereco = row[18];
-  const telefone = row[19];
-  const grupo = row[20];
-  const cor = row[22];
-  const clinicaRestricao = row[25];
-  const cursoEstagio = row[31];
-  
+  const espec = row[10];
+
+  // Cálculos Automáticos
   const today = new Date();
-  let age = 0;
   if (!isNaN(dtNasc.getTime())) {
-    age = today.getFullYear() - dtNasc.getFullYear();
+    let age = today.getFullYear() - dtNasc.getFullYear();
     const m = today.getMonth() - dtNasc.getMonth();
     if (m < 0 || (m === 0 && today.getDate() < dtNasc.getDate())) age--;
-  }
-  template.getRange("A11").setValue(age);
-  
-  if (dtPraca) {
-    const serviceTime = calculateTimeDiff(dtPraca, today);
-    template.getRange("A15").setValue(serviceTime);
-  } else {
-    template.getRange("A15").setValue("N/A");
+    template.getRange("A11").setValue(age);
   }
 
-  template.getRange("H4").setValue(codInsp); 
+  if (!isNaN(dtPraca.getTime())) {
+    template.getRange("A15").setValue(calculateServiceTime(dtPraca, today));
+  }
+
+  // Preenchimento de Campos
+  template.getRange("H4").setValue(row[1]); // Cod Insp
   template.getRange("B11").setValue(dtNasc);
-  template.getRange("L11").setValue(naturalidade);
-  
-  const brStates = ["AM", "AC", "AL", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RO", "RS", "RR", "SC", "SP", "SE", "TO"];
-  if (brStates.includes(naturalidade) || !naturalidade) {
-    template.getRange("I11").setValue("BRASILEIRA");
-  } else {
-    template.getRange("I11").setValue("ESTRANGEIRO");
-  }
-
+  template.getRange("L11").setValue(row[5]); // Naturalidade
   template.getRange("G15").setValue(cpf);
-  template.getRange("F11").setValue(sexo);
-  template.getRange("Q9").setValue(`${posto} ${quadro} ${especialidade}`.trim());
-  template.getRange("A9").setValue(nome);
-  template.getRange("O8").setValue(saram);
+  template.getRange("F11").setValue(row[7]); // Sexo
+  template.getRange("Q9").setValue(`${posto} ${quadro} ${espec}`.trim());
+  template.getRange("A9").setValue(row[11]); // Nome
+  template.getRange("O8").setValue(row[12]); // Saram
   template.getRange("M15").setValue(om);
-  template.getRange("D6").setValue(`Letra(s) ${row[15] || ''}`); 
-  template.getRange("Q11").setValue(email);
-  template.getRange("A13").setValue(endereco);
-  template.getRange("P15").setValue(telefone);
-  template.getRange("H2").setValue(grupo);
-  template.getRange("G11").setValue(cor);
+  template.getRange("D6").setValue("Letra(s) " + (row[15] || ""));
+  template.getRange("Q11").setValue(row[17]); // Email
+  template.getRange("A13").setValue(row[18]); // Endereço
+  template.getRange("P15").setValue(row[19]); // Telefone
+  template.getRange("H2").setValue(row[20]);  // Grupo
+  template.getRange("G11").setValue(row[22]); // Cor
 
-  if (!clinicaRestricao) {
-    template.getRange("N4").setValue("NÃO");
-  } else {
-    template.getRange("N4").setValue(clinicaRestricao);
-    template.getRange("N5").setValue(row[26]); 
-  }
+  // Nacionalidade baseada na naturalidade
+  const naturalidade = String(row[5]).toUpperCase();
+  const estados = ["AM", "AC", "AL", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RO", "RS", "RR", "SC", "SP", "SE", "TO"];
+  template.getRange("I11").setValue(estados.includes(naturalidade) ? "BRASILEIRA" : "ESTRANGEIRA");
 
-  if (cursoEstagio) {
-    template.getRange("K36").setValue(`*Curso/Estágio: ${cursoEstagio}. Periodo: ${row[32] || ''}`);
-  } else {
-    template.getRange("K36").setValue("");
-  }
-
-  const fullRank = `${posto} ${quadro} ${especialidade}`.toUpperCase();
-  const sgpoKeywords = ["BCT", "BCO", "CTA", "PTA", "OEA", "ATCO"];
-  const isSgpo = sgpoKeywords.some(key => fullRank.includes(key));
+  // Regras de OM (SGPO / BAVEX)
+  const fullSpec = `${posto} ${quadro} ${espec}`.toUpperCase();
+  const keywords = ["BCT", "BCO", "CTA", "PTA", "OEA", "ATCO"];
+  const isSgpo = keywords.some(k => fullSpec.includes(k));
   
-  if (om === "4 BAVEX") {
-    template.getRange("N1").setValue("4 BAVEX");
-  } else if (isSgpo) {
-    template.getRange("N1").setValue("SGPO");
-  } else {
-    template.getRange("N1").setValue("");
-  }
+  if (om === "4 BAVEX") template.getRange("N1").setValue("4 BAVEX");
+  else if (isSgpo) template.getRange("N1").setValue("SGPO");
 
+  // Nº do Arquivo (Prontuário)
   if (archiveCache[cpf]) {
     template.getRange("S4").setValue(archiveCache[cpf]);
   }
 
+  // Cópia para Impressão
   template.getRange("A1:T64").copyTo(target.getRange(startRow, 1));
 }
 
-function loadArchiveCache() {
-  const cache = {};
-  try {
-    const ssArchive = SpreadsheetApp.openByUrl(CONFIG.URL_BANCO_ARQUIVOS);
-    const sheet = ssArchive.getSheets()[0]; 
-    const lastRow = sheet.getLastRow();
-    if (lastRow < 4) return cache;
-    const data = sheet.getRange(4, 5, lastRow - 3, 2).getValues(); 
-    
-    data.forEach(row => {
-      const rawCpf = String(row[0]).replace(/\D/g, '');
-      if (rawCpf) {
-        const cpf = rawCpf.padStart(11, '0');
-        const archiveNum = row[1];
-        if (archiveNum) cache[cpf] = archiveNum;
-      }
-    });
-  } catch (e) {
-    Logger.log("Error loading archive cache: " + e.message);
-  }
-  return cache;
-}
-
-function calculateTimeDiff(start, end) {
+function calculateServiceTime(start, end) {
   let years = end.getFullYear() - start.getFullYear();
   let months = end.getMonth() - start.getMonth();
   let days = end.getDate() - start.getDate();
-
   if (days < 0) {
     months--;
     const lastMonth = new Date(end.getFullYear(), end.getMonth(), 0);
@@ -282,18 +247,20 @@ function calculateTimeDiff(start, end) {
     years--;
     months += 12;
   }
-  
   let res = [];
   if (years > 0) res.push(`${years} ano(s)`);
   if (months > 0) res.push(`${months} mes(es)`);
   if (days > 0) res.push(`${days} dia(s)`);
-  
-  return res.length > 0 ? res.join(", ") : "0 dias";
+  return res.join(", ") || "0 dias";
 }
 
 function formatValue(val) {
-  if (val instanceof Date) {
-    return Utilities.formatDate(val, Session.getScriptTimeZone(), "dd/MM/yyyy");
-  }
+  if (val instanceof Date) return Utilities.formatDate(val, Session.getScriptTimeZone(), "dd/MM/yyyy");
   return val ? String(val) : "";
+}
+
+function getPrintUrl() {
+  const ss = CONFIG.SS;
+  const sheet = ss.getSheetByName("IMPRESSAO");
+  return sheet ? `${ss.getUrl()}#gid=${sheet.getSheetId()}` : ss.getUrl();
 }

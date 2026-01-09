@@ -9,10 +9,10 @@ import {
   CheckCircleIcon,
   ExclamationCircleIcon,
   IdentificationIcon,
-  UserGroupIcon,
   UsersIcon,
   UserIcon,
-  DocumentTextIcon
+  DocumentTextIcon,
+  MagnifyingGlassIcon
 } from '@heroicons/react/24/outline';
 
 const App: React.FC = () => {
@@ -31,8 +31,15 @@ const App: React.FC = () => {
       const result = await gasService.fetchInspections();
       setInspections(result.inspections);
       setStats(result.stats);
-    } catch (err) {
-      setStatus({ type: 'error', message: 'Erro ao carregar banco de fichas externo.' });
+      if (result.inspections.length === 0) {
+        setStatus({ type: null, message: 'Nenhuma inspeção encontrada para a data de hoje.' });
+      }
+    } catch (err: any) {
+      console.error("Erro detalhado:", err);
+      setStatus({ 
+        type: 'error', 
+        message: `Erro ao carregar dados: ${err.message || err || 'Erro desconhecido'}. Verifique se o Script foi publicado corretamente.` 
+      });
     } finally {
       setLoading(false);
     }
@@ -72,15 +79,15 @@ const App: React.FC = () => {
       if (result.success) {
         setStatus({ 
           type: 'success', 
-          message: `${result.count} ficha(s) pronta(s) para impressão!`,
+          message: `${result.message}`,
           printUrl: result.printUrl 
         });
         setSelectedIds(new Set());
       } else {
         setStatus({ type: 'error', message: result.message });
       }
-    } catch (err) {
-      setStatus({ type: 'error', message: 'Erro crítico durante o processamento.' });
+    } catch (err: any) {
+      setStatus({ type: 'error', message: `Erro no processamento: ${err.message || 'Falha na comunicação com o servidor.'}` });
     } finally {
       setProcessing(false);
     }
@@ -95,19 +102,17 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen p-4 md:p-8 max-w-[1600px] mx-auto space-y-6">
-      {/* Header & Main Stats */}
       <header className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
         <div className="flex items-center gap-4">
           <div className="p-3 bg-blue-600 rounded-xl shadow-lg shadow-blue-200">
             <ClipboardDocumentCheckIcon className="h-8 w-8 text-white" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-slate-800">Fichas do Dia</h1>
-            <p className="text-slate-500 text-sm">Gerenciamento em tempo real de inspeções de saúde.</p>
+            <h1 className="text-2xl font-bold text-slate-800">Inspeções de Hoje</h1>
+            <p className="text-slate-500 text-sm">Controle de Fichas de Inspeção de Saúde (FIS)</p>
           </div>
         </div>
 
-        {/* Dashboard Counters */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 flex-1 max-w-2xl">
           <StatCard icon={<DocumentTextIcon className="h-5 w-5"/>} label="Fichas" value={stats.totalFichas} color="text-blue-600" bg="bg-blue-50" />
           <StatCard icon={<UsersIcon className="h-5 w-5"/>} label="Pessoas" value={stats.uniqueInspecionandos} color="text-indigo-600" bg="bg-indigo-50" />
@@ -120,7 +125,7 @@ const App: React.FC = () => {
             onClick={loadData}
             disabled={loading || processing}
             className="p-3 rounded-xl bg-white border border-slate-200 shadow-sm hover:bg-slate-50 transition-colors disabled:opacity-50"
-            title="Recarregar dados"
+            title="Recarregar APIs"
           >
             <ArrowPathIcon className={`h-5 w-5 text-slate-600 ${loading ? 'animate-spin' : ''}`} />
           </button>
@@ -128,7 +133,7 @@ const App: React.FC = () => {
           <button
             onClick={handleGenerate}
             disabled={selectedIds.size === 0 || processing}
-            className="flex items-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-xl font-semibold shadow-lg shadow-blue-200 hover:bg-blue-700 active:scale-95 transition-all disabled:opacity-50 disabled:shadow-none disabled:active:scale-100 whitespace-nowrap"
+            className="flex items-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-xl font-semibold shadow-lg shadow-blue-200 hover:bg-blue-700 active:scale-95 transition-all disabled:opacity-50 whitespace-nowrap"
           >
             {processing ? (
               <div className="h-5 w-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -140,7 +145,6 @@ const App: React.FC = () => {
         </div>
       </header>
 
-      {/* Alerts */}
       {status.type && (
         <div className={`p-4 rounded-xl flex flex-col md:flex-row items-center justify-between gap-4 border animate-in fade-in slide-in-from-top-4 ${
           status.type === 'success' ? 'bg-emerald-50 border-emerald-100 text-emerald-800' : 'bg-rose-50 border-rose-100 text-rose-800'
@@ -157,28 +161,26 @@ const App: React.FC = () => {
               className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-bold shadow-sm hover:bg-emerald-700 transition-colors flex items-center gap-2"
             >
               <PrinterIcon className="h-4 w-4" />
-              ABRIR PARA IMPRIMIR
+              ABRIR ABA IMPRESSÃO
             </a>
           )}
         </div>
       )}
 
-      {/* Table & Filter */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-        <div className="p-4 border-b border-slate-100 bg-slate-50/30">
-          <div className="relative max-w-md">
+        <div className="p-4 border-b border-slate-100 bg-slate-50/30 flex justify-between items-center">
+          <div className="relative max-w-md w-full">
             <input
               type="text"
-              placeholder="Filtro rápido..."
+              placeholder="Buscar por nome, CPF ou RG..."
               className="w-full pl-10 pr-4 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-sm"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />
-            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
-            </div>
+            <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+          </div>
+          <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+            Exibindo registros de {new Date().toLocaleDateString('pt-BR')}
           </div>
         </div>
 
@@ -195,18 +197,18 @@ const App: React.FC = () => {
                   />
                 </th>
                 <th className="px-4 py-4">Inspecionado</th>
-                <th className="px-4 py-4">Posto / Quadro / Espec.</th>
+                <th className="px-4 py-4">Posto / Quadro / Especialidade</th>
                 <th className="px-4 py-4">CPF / Sexo</th>
-                <th className="px-4 py-4">Controle</th>
+                <th className="px-4 py-4">Prontuário (Arq.)</th>
                 <th className="px-4 py-4">Finalidade</th>
-                <th className="px-4 py-4">Bio / Idade</th>
+                <th className="px-4 py-4">Idade</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
-                Array.from({ length: 6 }).map((_, i) => (
+                Array.from({ length: 5 }).map((_, i) => (
                   <tr key={i} className="animate-pulse">
-                    <td colSpan={7} className="px-4 py-6 bg-slate-50/10"></td>
+                    <td colSpan={7} className="px-4 py-6 bg-slate-50/10 border-b border-slate-50"></td>
                   </tr>
                 ))
               ) : filteredInspections.length > 0 ? (
@@ -228,11 +230,9 @@ const App: React.FC = () => {
                       <div className="font-bold text-slate-800 uppercase text-xs leading-tight">{item.nome}</div>
                       <div className="text-[10px] text-slate-400 font-mono mt-0.5">{item.codInsp}</div>
                     </td>
-                    <td className="px-4 py-4">
-                      <div className="flex flex-col">
-                        <span className="text-[10px] font-black text-blue-700">{item.posto}</span>
-                        <span className="text-[10px] text-slate-500 uppercase font-medium">{item.quadro} {item.especialidade}</span>
-                      </div>
+                    <td className="px-4 py-4 text-[10px] font-medium">
+                      <div className="text-blue-700 font-black">{item.posto}</div>
+                      <div className="text-slate-500 uppercase">{item.quadro} - {item.especialidade}</div>
                     </td>
                     <td className="px-4 py-4">
                       <div className="flex flex-col gap-0.5">
@@ -244,9 +244,13 @@ const App: React.FC = () => {
                       </div>
                     </td>
                     <td className="px-4 py-4">
-                      <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded border border-blue-100">
-                        {item.controle || 'N/A'}
-                      </span>
+                      {item.controle ? (
+                        <span className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-1 rounded border border-blue-100">
+                          {item.controle}
+                        </span>
+                      ) : (
+                        <span className="text-[9px] text-slate-300 italic">Não vinculado</span>
+                      )}
                     </td>
                     <td className="px-4 py-4 max-w-xs">
                       <div className="text-[10px] text-slate-500 line-clamp-2 italic" title={item.finalidade}>
@@ -254,12 +258,9 @@ const App: React.FC = () => {
                       </div>
                     </td>
                     <td className="px-4 py-4">
-                      <div className="flex items-center gap-3">
-                        <div className="flex flex-col">
-                          <span className="text-xs font-bold text-slate-700">{item.idade} ANOS</span>
-                          <span className="text-[9px] text-slate-400">{item.dtNascimento}</span>
-                        </div>
-                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 font-bold uppercase">{item.vinculo}</span>
+                      <div className="flex flex-col">
+                        <span className="text-xs font-bold text-slate-700">{item.idade} ANOS</span>
+                        <span className="text-[9px] text-slate-400">{item.dtNascimento}</span>
                       </div>
                     </td>
                   </tr>
@@ -268,7 +269,7 @@ const App: React.FC = () => {
                 <tr>
                   <td colSpan={7} className="px-4 py-20 text-center">
                     <DocumentTextIcon className="h-12 w-12 text-slate-200 mx-auto mb-4" />
-                    <p className="text-slate-400 font-medium">Nenhuma ficha registrada para hoje ({new Date().toLocaleDateString('pt-BR')})</p>
+                    <p className="text-slate-400 font-medium">Nenhum registro encontrado para hoje.</p>
                   </td>
                 </tr>
               )}

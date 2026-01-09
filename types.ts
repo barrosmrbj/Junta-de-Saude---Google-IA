@@ -1,6 +1,6 @@
 
 export interface InspectionData {
-  id: string; // Internal unique ID
+  id: string;
   dtInsp: string;
   codInsp: string;
   rg: string;
@@ -13,16 +13,30 @@ export interface InspectionData {
   dtNascimento: string;
   dtPraca: string;
   originalIndex: number;
-  // New requested fields
-  controle: string;      // Cod da ficha
-  finalidade: string;    // Finalidade da inspeção
-  grupo: string;         // Grupo
-  vinculo: string;       // Vínculo
-  idade: number;         // Idade calculada
+  vinculo: string;
+  finalidade: string;
+  grupo: string;
+  idade: number;
+  controle: string;
+  sexo: string;
+}
+
+export interface DashboardStats {
+  totalFichas: number;
+  uniqueInspecionandos: number;
+  homens: number;
+  mulheres: number;
+}
+
+export interface FetchResult {
+  inspections: InspectionData[];
+  stats: DashboardStats;
+  printUrl: string;
 }
 
 export interface ProcessingResult {
   success: boolean;
   message: string;
   count?: number;
+  printUrl?: string;
 }

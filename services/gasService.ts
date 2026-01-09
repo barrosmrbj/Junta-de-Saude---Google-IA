@@ -1,21 +1,17 @@
 
-import { InspectionData, ProcessingResult } from '../types';
+import { InspectionData, ProcessingResult, FetchResult } from '../types';
 
-/**
- * Mocking the google.script.run for local development.
- * In production, this will be replaced by the actual GAS global object.
- */
 const run = (window as any).google?.script?.run;
 
 export const gasService = {
-  fetchInspections: async (): Promise<InspectionData[]> => {
+  fetchInspections: async (): Promise<FetchResult> => {
     if (!run) {
       console.warn("Google Apps Script environment not detected. Returning mock data.");
-      return [
+      const mockData: InspectionData[] = [
         {
           id: '1',
-          dtInsp: '08/01/2026',
-          codInsp: 'INSP-20251229',
+          dtInsp: new Date().toLocaleDateString('pt-BR'),
+          codInsp: 'INSP-20260108-MOCK',
           rg: '528389',
           nome: 'MARCELINO RODRIGUES BARROS JUNIOR',
           cpf: '752.177.912-68',
@@ -26,18 +22,28 @@ export const gasService = {
           dtNascimento: '05/09/1984',
           dtPraca: '06/03/2003',
           originalIndex: 1,
-          // Adding missing properties to fix type error
           controle: 'F-001',
-          finalidade: 'INSPEÇÃO DE SAÚDE PERIÓDICA',
-          grupo: 'GRUPO 1',
-          vinculo: 'ATIVO',
-          idade: 41
+          finalidade: 'G1 - Verificação de capacidade funcional',
+          grupo: 'IIB',
+          vinculo: 'AERONAUTICA',
+          idade: 41,
+          sexo: 'MASC'
         }
       ];
+      return {
+        inspections: mockData,
+        stats: {
+          totalFichas: 1,
+          uniqueInspecionandos: 1,
+          homens: 1,
+          mulheres: 0
+        },
+        printUrl: '#'
+      };
     }
 
     return new Promise((resolve, reject) => {
-      run.withSuccessHandler((data: any) => resolve(data))
+      run.withSuccessHandler((data: FetchResult) => resolve(data))
          .withFailureHandler((err: any) => reject(err))
          .getPendingInspections();
     });
@@ -46,7 +52,12 @@ export const gasService = {
   processFichas: async (indices: number[]): Promise<ProcessingResult> => {
     if (!run) {
       return new Promise((resolve) => {
-        setTimeout(() => resolve({ success: true, message: 'Processamento simulado concluído!', count: indices.length }), 2000);
+        setTimeout(() => resolve({ 
+          success: true, 
+          message: 'Processamento simulado concluído!', 
+          count: indices.length,
+          printUrl: '#' 
+        }), 1000);
       });
     }
 

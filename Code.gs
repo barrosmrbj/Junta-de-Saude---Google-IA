@@ -5,7 +5,7 @@
 
 const CONFIG = {
   SS: SpreadsheetApp.getActiveSpreadsheet(),
-  URL_BANCO_INSPECIONADOS: "https://docs.google.com/spreadsheets/d/11IgiIAjSwYfK-F_rQrVqXhmI83ACaQbjRFwG2wiADtU/edit?gid=604402005#gid=604402005",
+  URL_FICHAS_HOJE: "https://docs.google.com/spreadsheets/d/1CWXzs_J1tTITIZ52_0t02tUb8tBewKSBNWNyaHb6z8M/edit?gid=350819832#gid=350819832",
   URL_BANCO_ARQUIVOS: "https://docs.google.com/spreadsheets/d/1s41r4hqE0qUgs7i49klZEMjtQXrXDko1gJpi2Hq9ZtE/edit?gid=1185443922#gid=1185443922"
 };
 
@@ -19,71 +19,118 @@ function doGet() {
 }
 
 /**
- * Fetches data from "DADOS" sheet to display in the UI
+ * Fetches data from external "FICHAS" sheet, filtered by today's date
  */
 function getPendingInspections() {
-  const sheet = CONFIG.SS.getSheetByName("DADOS");
-  if (!sheet) return [];
-  
-  const values = sheet.getDataRange().getValues();
-  if (values.length <= 1) return [];
-  
-  const rows = values.slice(1);
-  const today = new Date();
-  
-  return rows.map((row, index) => {
-    const dtNasc = row[4] instanceof Date ? row[4] : new Date(row[4]);
-    let age = 0;
-    if (!isNaN(dtNasc.getTime())) {
-      age = today.getFullYear() - dtNasc.getFullYear();
-      const m = today.getMonth() - dtNasc.getMonth();
-      if (m < 0 || (m === 0 && today.getDate() < dtNasc.getDate())) {
-        age--;
+  try {
+    const ssExternal = SpreadsheetApp.openByUrl(CONFIG.URL_FICHAS_HOJE);
+    const sheet = ssExternal.getSheetByName("FICHAS");
+    if (!sheet) return { inspections: [], stats: { totalFichas: 0, uniqueInspecionandos: 0, homens: 0, mulheres: 0 }, printUrl: "" };
+    
+    const values = sheet.getDataRange().getValues();
+    if (values.length <= 1) return { inspections: [], stats: { totalFichas: 0, uniqueInspecionandos: 0, homens: 0, mulheres: 0 }, printUrl: "" };
+    
+    const rows = values.slice(1);
+    const todayStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd/MM/yyyy");
+    
+    const uniqueCpfs = new Set();
+    let homens = 0;
+    let mulheres = 0;
+    
+    const inspections = rows.map((row, index) => {
+      const dtInspVal = formatValue(row[0]);
+      // Only process if it matches today or if user wants all (prompt said "of the day")
+      if (dtInspVal !== todayStr && row[0] !== "") {
+         // Optionally skip, but usually for debugging we might show all. 
+         // Let's stick to the request: "buscar as fichas somente do dia"
+         // return null; 
       }
-    }
 
-    // Mapping based on the provided header list and examples
-    return {
-      dtInsp: formatValue(row[0]),
-      codInsp: row[1],
-      rg: row[2],
-      dtNascimento: formatValue(row[4]),
-      cpf: formatValue(row[6]),
-      nome: row[11],
-      om: row[13],
-      posto: row[8],
-      quadro: row[9],
-      especialidade: row[10],
-      dtPraca: formatValue(row[14]),
-      originalIndex: index + 2,
-      // New fields for display
-      vinculo: row[15],
-      finalidade: row[16],
-      grupo: row[20],
-      idade: age,
-      controle: row[37] || row[41] || "" // Assuming CONTROLE is at the end (Col AL is 38th column if 0-indexed is 37)
+      const dtNasc = row[4] instanceof Date ? row[4] : new Date(row[4]);
+      let age = 0;
+      if (!isNaN(dtNasc.getTime())) {
+        const today = new Date();
+        age = today.getFullYear() - dtNasc.getFullYear();
+        const m = today.getMonth() - dtNasc.getMonth();
+        if (m < 0 || (m === 0 && today.getDate() < dtNasc.getDate())) age--;
+      }
+
+      const cpf = String(row[6]).replace(/\D/g, '').padStart(11, '0');
+      const sexo = String(row[7]).toUpperCase();
+      
+      uniqueCpfs.add(cpf);
+      if (sexo.includes("MASC") || sexo === "M") homens++;
+      else if (sexo.includes("FEM") || sexo === "F") mulheres++;
+
+      return {
+        dtInsp: dtInspVal,
+        codInsp: row[1],
+        rg: row[2],
+        dtNascimento: formatValue(row[4]),
+        cpf: cpf,
+        sexo: sexo,
+        nome: row[11],
+        om: row[13],
+        posto: row[8],
+        quadro: row[9],
+        especialidade: row[10],
+        dtPraca: formatValue(row[14]),
+        originalIndex: index + 2, // Row in the external sheet
+        vinculo: row[15],
+        finalidade: row[16],
+        grupo: row[20],
+        idade: age,
+        controle: row[41] || row[37] || "" 
+      };
+    }).filter(item => item !== null && item.dtInsp === todayStr);
+
+    const stats = {
+      totalFichas: inspections.length,
+      uniqueInspecionandos: uniqueCpfs.size,
+      homens: homens,
+      mulheres: mulheres
     };
-  });
+
+    return { 
+      inspections, 
+      stats,
+      printUrl: getPrintUrl()
+    };
+  } catch (e) {
+    Logger.log("Error fetching inspections: " + e.message);
+    throw new Error("Erro ao acessar banco de fichas externo.");
+  }
 }
 
 /**
- * Main action to generate fichas for selected row indices
+ * Returns a URL for the IMPRESSAO sheet in PDF/Print mode
+ */
+function getPrintUrl() {
+  const ss = CONFIG.SS;
+  const sheet = ss.getSheetByName("IMPRESSAO");
+  if (!sheet) return "";
+  return `${ss.getUrl()}#gid=${sheet.getSheetId()}`;
+}
+
+/**
+ * Main action to generate fichas for selected row indices from EXTERNAL sheet
  */
 function generateFichasAction(selectedIndices) {
   const ss = CONFIG.SS;
-  const sheetDados = ss.getSheetByName("DADOS");
   const sheetTemplate = ss.getSheetByName("TEMPLATE");
   const sheetImpressao = ss.getSheetByName("IMPRESSAO");
   
-  if (!sheetDados || !sheetTemplate || !sheetImpressao) {
-    return { success: false, message: "Abas necessárias (DADOS, TEMPLATE ou IMPRESSAO) não encontradas." };
+  if (!sheetTemplate || !sheetImpressao) {
+    return { success: false, message: "Abas TEMPLATE ou IMPRESSAO não encontradas." };
   }
   
   sheetImpressao.clear();
   let currentRow = 1;
   
+  const ssExternal = SpreadsheetApp.openByUrl(CONFIG.URL_FICHAS_HOJE);
+  const sheetExternal = ssExternal.getSheetByName("FICHAS");
+  const allData = sheetExternal.getDataRange().getValues();
   const archiveCache = loadArchiveCache();
-  const allData = sheetDados.getDataRange().getValues();
   
   selectedIndices.sort((a, b) => a - b).forEach((rowIndex) => {
     const dataRow = allData[rowIndex - 1]; 
@@ -93,8 +140,8 @@ function generateFichasAction(selectedIndices) {
   
   return { 
     success: true, 
-    message: `Sucesso! ${selectedIndices.length} ficha(s) gerada(s) na aba IMPRESSAO.`,
-    count: selectedIndices.length 
+    message: `Sucesso! ${selectedIndices.length} ficha(s) gerada(s).`,
+    printUrl: getPrintUrl()
   };
 }
 
@@ -131,9 +178,7 @@ function processRow(row, template, target, startRow, archiveCache) {
   if (!isNaN(dtNasc.getTime())) {
     age = today.getFullYear() - dtNasc.getFullYear();
     const m = today.getMonth() - dtNasc.getMonth();
-    if (m < 0 || (m === 0 && today.getDate() < dtNasc.getDate())) {
-      age--;
-    }
+    if (m < 0 || (m === 0 && today.getDate() < dtNasc.getDate())) age--;
   }
   template.getRange("A11").setValue(age);
   
@@ -218,7 +263,7 @@ function loadArchiveCache() {
       }
     });
   } catch (e) {
-    Logger.log("Error loading archive database: " + e.message);
+    Logger.log("Error loading archive cache: " + e.message);
   }
   return cache;
 }

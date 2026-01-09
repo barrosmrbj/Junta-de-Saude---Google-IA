@@ -1,0 +1,5 @@
+{
+  "name": "Gerador de Fichas de Inspeção de Saúde",
+  "description": "Aplicação para processar dados de inspeção de saúde, realizar cálculos automáticos de tempo de serviço e idade, e gerar fichas formatadas para impressão baseadas em templates do Google Sheets.",
+  "requestFramePermissions": []
+}

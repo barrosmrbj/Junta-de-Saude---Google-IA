@@ -1,27 +1,413 @@
-
 <!DOCTYPE html>
 <html lang="pt-br">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gerador de Fichas</title>
+    <title>Gerenciador FIS - Realtime</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-        body { font-family: 'Inter', sans-serif; }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap');
+        body { font-family: 'Inter', sans-serif; font-size: 14px; overflow-x: hidden; }
+        .status-badge { font-size: 9px; font-weight: 900; padding: 2px 8px; border-radius: 6px; text-transform: uppercase; white-space: nowrap; }
+        .status-impresso { background: #dcfce7; color: #15803d; border: 1.5px solid #bbf7d0; }
+        .status-aguardando { background: #fef9c3; color: #a16207; border: 1.5px solid #fef08a; }
+        
+        .table-wrapper {
+            width: 100%;
+            overflow-x: auto;
+            position: relative;
+            background: white;
+            border-radius: 1.5rem;
+        }
+        
+        thead th {
+            background: #f8fafc;
+            white-space: nowrap;
+            padding: 1rem 1.5rem;
+            font-size: 10px;
+            font-weight: 900;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .sticky-actions {
+            position: sticky;
+            right: 0;
+            background: white;
+            z-index: 10;
+            box-shadow: -10px 0 15px -10px rgba(0,0,0,0.1);
+            min-width: 120px;
+        }
+        
+        th.sticky-actions { z-index: 20; background: #f8fafc; }
+        tr:hover .sticky-actions { background: #f1f5f9; }
+        
+        .col-nome { min-width: 480px; }
+        .col-om { min-width: 130px; }
+        .col-cpf { min-width: 180px; }
+        .col-vinculo { min-width: 200px; }
+        .col-finalidade { min-width: 280px; }
+        .col-ficha { min-width: 140px; }
+
+        @keyframes shimmer {
+            0% { background-position: -200% 0; }
+            100% { background-position: 200% 0; }
+        }
+        .progress-shimmer {
+            background: linear-gradient(90deg, #3b82f6 25%, #60a5fa 50%, #3b82f6 75%);
+            background-size: 200% 100%;
+            animation: shimmer 2s infinite linear;
+        }
     </style>
-<script type="importmap">
-{
-  "imports": {
-    "react/": "https://esm.sh/react@^19.2.3/",
-    "react": "https://esm.sh/react@^19.2.3",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "@heroicons/react/": "https://esm.sh/@heroicons/react@^2.2.0/"
-  }
-}
-</script>
 </head>
-<body class="bg-slate-50 text-slate-900">
+<body class="bg-slate-100 text-slate-900">
     <div id="root"></div>
+
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom": "https://esm.sh/react-dom@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1"
+      }
+    }
+    </script>
+
+    <script type="module">
+        import React, { useState, useEffect, useCallback, useMemo } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { 
+            ClipboardCheck, Printer, Trash2, CheckCircle2, AlertCircle, 
+            Search, Calendar, ArrowUpDown, Shield, History, UserCheck, MapPin, 
+            Download, Loader2, User
+        } from 'lucide-react';
+
+        const formatCPF = (cpf) => {
+            const clean = String(cpf).replace(/\D/g, '').padStart(11, '0');
+            return clean.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4");
+        };
+
+        const App = () => {
+            const [inspections, setInspections] = useState([]);
+            const [stats, setStats] = useState({ totalFichas: 0, impressas: 0, uniquePessoas: 0, homens: 0, mulheres: 0 });
+            const [selectedIds, setSelectedIds] = useState(new Set());
+            const [loading, setLoading] = useState(true);
+            const [processingState, setProcessingState] = useState({ active: false, step: '', progress: 0 });
+            const [searchTerm, setSearchTerm] = useState('');
+            const [omSearchTerm, setOmSearchTerm] = useState('');
+            
+            /**
+             * Inicializa sempre com a DATA DE HOJE local
+             */
+            const [filterDate, setFilterDate] = useState(() => {
+                const today = new Date();
+                const yyyy = today.getFullYear();
+                const mm = String(today.getMonth() + 1).padStart(2, '0');
+                const dd = String(today.getDate()).padStart(2, '0');
+                return `${yyyy}-${mm}-${dd}`;
+            }); 
+            
+            const [lastUpdate, setLastUpdate] = useState('--:--:--');
+            const [sortConfig, setSortConfig] = useState({ key: 'nome', direction: 'asc' });
+            const [status, setStatus] = useState({ type: null, message: '', printUrl: '' });
+
+            const isGasEnv = typeof google !== 'undefined' && google.script && google.script.run;
+
+            const loadData = useCallback((silent = false) => {
+                if (!silent) setLoading(true);
+                if (isGasEnv) {
+                    google.script.run
+                        .withSuccessHandler((res) => {
+                            if (res && res.success) {
+                                setInspections(res.inspections || []);
+                                setStats(res.stats);
+                                setLastUpdate(res.serverTime);
+                            } else setStatus({ type: 'error', message: res.error });
+                            setLoading(false);
+                        })
+                        .fetchData(filterDate);
+                } else {
+                    // Simulação para preview offline
+                    setTimeout(() => {
+                        setInspections([
+                            { originalIndex: 2, nome: "MARCELINO RODRIGUES BARROS JUNIOR", dtNascimento: "05/09/1984", idade: 41, naturalidade: "AM", posto: "3S", quadro: "QESA", especialidade: "SEF", cpf: "75217791268", saram: "3999483", om: "HAMN", vinculo: "AERONAUTICA", grupo: "IIB - DEMAIS", finalidade: "G1 - VERIFICAÇÃO DE CAPACIDADE FUNCIONAL", codFicha: "FICHC59B82", status: "AGUARDANDO" }
+                        ]);
+                        setLoading(false);
+                    }, 800);
+                }
+            }, [isGasEnv, filterDate]);
+
+            useEffect(() => {
+                loadData();
+                const interval = setInterval(() => loadData(true), 30000); // Auto-refresh a cada 30s
+                return () => clearInterval(interval);
+            }, [loadData]);
+
+            const sortedItems = useMemo(() => {
+                let items = inspections.filter(i => 
+                    (i.nome.toLowerCase().includes(searchTerm.toLowerCase()) || i.cpf.includes(searchTerm) || i.saram.includes(searchTerm)) &&
+                    (i.om.toLowerCase().includes(omSearchTerm.toLowerCase()))
+                );
+                if (sortConfig.key) {
+                    items.sort((a, b) => {
+                        if (a[sortConfig.key] < b[sortConfig.key]) return sortConfig.direction === 'asc' ? -1 : 1;
+                        if (a[sortConfig.key] > b[sortConfig.key]) return sortConfig.direction === 'asc' ? 1 : -1;
+                        return 0;
+                    });
+                }
+                return items;
+            }, [inspections, searchTerm, omSearchTerm, sortConfig]);
+
+            const handleGenerate = async (ids = null) => {
+                const targetIds = ids || Array.from(selectedIds);
+                if (targetIds.length === 0) return;
+                
+                setProcessingState({ active: true, step: 'Alimentando Template...', progress: 15 });
+                if (isGasEnv) {
+                    google.script.run
+                        .withSuccessHandler((res) => {
+                            if (res.success) {
+                                setProcessingState({ active: true, step: 'Gerando PDF Final...', progress: 100 });
+                                setTimeout(() => {
+                                    setStatus({ type: 'success', message: res.message, printUrl: res.printUrl });
+                                    setSelectedIds(new Set());
+                                    setProcessingState({ active: false, step: '', progress: 0 });
+                                    loadData(true);
+                                    window.open(res.printUrl, '_blank');
+                                }, 800);
+                            } else {
+                                setStatus({ type: 'error', message: res.error });
+                                setProcessingState({ active: false, step: '', progress: 0 });
+                            }
+                        })
+                        .generateFichasAction(targetIds);
+                }
+            };
+
+            const handleDelete = (index) => {
+                if (!confirm("Confirmar exclusão desta ficha do banco de dados?")) return;
+                if (isGasEnv) {
+                    google.script.run.withSuccessHandler(() => loadData(true)).deleteFichaAction(index);
+                }
+            };
+
+            const headerRow = React.createElement('tr', {}, [
+                React.createElement('th', { className: "px-8 py-5 w-16 text-center" }, 
+                    React.createElement('input', { 
+                        type: "checkbox", 
+                        className: "w-5 h-5 rounded-md cursor-pointer",
+                        onChange: (e) => {
+                            if(e.target.checked) setSelectedIds(new Set(sortedItems.map(i => i.originalIndex)));
+                            else setSelectedIds(new Set());
+                        }
+                    })
+                ),
+                React.createElement('th', { 
+                    className: "col-nome cursor-pointer hover:text-blue-600",
+                    onClick: () => setSortConfig({key: 'nome', direction: sortConfig.direction === 'asc' ? 'desc' : 'asc'})
+                }, [
+                    "Inspecionado / Informações", 
+                    React.createElement(ArrowUpDown, { size: 12, className: "inline ml-1" })
+                ]),
+                React.createElement('th', { className: "col-om" }, "OM"),
+                React.createElement('th', { className: "col-cpf" }, "CPF / SARAM"),
+                React.createElement('th', { className: "col-vinculo" }, "Vínculo / Grupo"),
+                React.createElement('th', { className: "col-finalidade" }, "Finalidade"),
+                React.createElement('th', { className: "col-ficha text-center" }, "Cód Ficha"),
+                React.createElement('th', { className: "sticky-actions text-center px-6" }, "Ações")
+            ]);
+
+            const tableBody = loading ? 
+                React.createElement('tr', {}, React.createElement('td', { colSpan: 8, className: "px-6 py-24 text-center text-slate-300 font-black animate-pulse uppercase text-lg" }, "Carregando registros da aba FICHAS...")) :
+                sortedItems.length === 0 ?
+                React.createElement('tr', {}, React.createElement('td', { colSpan: 8, className: "px-6 py-32 text-center text-slate-400 font-black uppercase text-xl" }, "Nenhum inspecionado encontrado nesta data")) :
+                sortedItems.map(item => React.createElement('tr', { 
+                    key: item.originalIndex, 
+                    className: `transition-all ${selectedIds.has(item.originalIndex) ? 'bg-blue-50/60' : 'hover:bg-slate-50/50'}` 
+                }, [
+                    React.createElement('td', { className: "px-8 py-6 text-center" }, 
+                        React.createElement('input', { 
+                            type: "checkbox", 
+                            className: "w-5 h-5 rounded-md cursor-pointer", 
+                            checked: selectedIds.has(item.originalIndex), 
+                            onChange: () => {
+                                const n = new Set(selectedIds);
+                                n.has(item.originalIndex) ? n.delete(item.originalIndex) : n.add(item.originalIndex);
+                                setSelectedIds(n);
+                            } 
+                        })
+                    ),
+                    React.createElement('td', { className: "px-6 py-6 col-nome" }, [
+                        React.createElement('div', { className: "font-black text-slate-900 text-xl uppercase tracking-tight leading-none" }, item.nome),
+                        React.createElement('div', { className: "font-bold text-slate-500 text-sm mt-2 uppercase" }, `${item.posto} ${item.quadro} ${item.especialidade}`),
+                        React.createElement('div', { className: "text-[11px] font-black mt-3 flex items-center gap-3 flex-wrap" }, [
+                            React.createElement('span', { className: "text-blue-600 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-100" }, item.dtNascimento),
+                            React.createElement('span', { className: "text-slate-800 font-black bg-slate-100 px-2 py-1 rounded-lg" }, `${item.idade} ANOS`),
+                            React.createElement('span', { className: "text-slate-300" }, "|"),
+                            React.createElement('span', { className: "text-slate-500 uppercase font-semibold" }, `Origem: `),
+                            React.createElement('span', { className: "text-slate-900 font-bold uppercase" }, item.naturalidade)
+                        ])
+                    ]),
+                    React.createElement('td', { className: "px-6 py-6 col-om" }, 
+                        React.createElement('div', { className: "font-black text-blue-700 text-lg tracking-tighter" }, item.om)
+                    ),
+                    React.createElement('td', { className: "px-6 py-6 col-cpf" }, [
+                        React.createElement('div', { className: "font-mono font-black text-slate-700 text-sm" }, formatCPF(item.cpf)),
+                        React.createElement('div', { className: "text-[10px] text-slate-400 font-black uppercase mt-1" }, `SARAM: ${item.saram}`)
+                    ]),
+                    React.createElement('td', { className: "px-6 py-6 col-vinculo" }, [
+                        React.createElement('div', { className: "font-black text-slate-600 text-xs uppercase" }, item.vinculo),
+                        React.createElement('div', { className: "text-[10px] bg-slate-100 text-slate-500 px-2 py-1 rounded-lg font-black mt-2 inline-block uppercase border" }, `Grupo: ${item.grupo}`)
+                    ]),
+                    React.createElement('td', { className: "px-6 py-6 col-finalidade" }, 
+                        React.createElement('div', { className: "text-[10px] font-bold text-slate-500 uppercase leading-relaxed max-w-[260px]" }, item.finalidade)
+                    ),
+                    React.createElement('td', { className: "px-6 py-6 col-ficha text-center" }, 
+                        React.createElement('div', { className: "flex flex-col items-center justify-center gap-1.5" }, [
+                            React.createElement('div', { className: "font-black text-slate-900 text-xs tracking-widest" }, item.codFicha || "PENDENTE"),
+                            React.createElement('div', { className: `status-badge ${item.status === 'IMPRESSO' ? 'status-impresso' : 'status-aguardando'}` }, item.status)
+                        ])
+                    ),
+                    React.createElement('td', { className: "px-6 py-6 text-center sticky-actions" }, 
+                        React.createElement('div', { className: "flex items-center justify-center gap-3" }, [
+                            React.createElement('button', { 
+                                onClick: () => handleGenerate([item.originalIndex]), 
+                                title: "Gerar Ficha", 
+                                className: "p-3 bg-blue-50 text-blue-600 rounded-2xl hover:bg-blue-600 hover:text-white transition-all shadow-sm border border-blue-100" 
+                            }, React.createElement(Printer, { size: 20 })),
+                            React.createElement('button', { 
+                                onClick: () => handleDelete(item.originalIndex), 
+                                title: "Excluir Registro", 
+                                className: "p-3 bg-rose-50 text-rose-600 rounded-2xl hover:bg-rose-600 hover:text-white transition-all shadow-sm border border-rose-100" 
+                            }, React.createElement(Trash2, { size: 20 }))
+                        ])
+                    )
+                ]));
+
+            return React.createElement('div', { className: "p-4 md:p-6 w-full space-y-6" }, [
+                
+                // MODAL CARREGAMENTO
+                processingState.active && React.createElement('div', { key: 'loader-modal', className: "fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/80 backdrop-blur-md" }, [
+                    React.createElement('div', { className: "bg-white p-12 rounded-[3.5rem] shadow-2xl w-full max-w-lg text-center space-y-6 border border-white/20" }, [
+                        React.createElement(Loader2, { className: "mx-auto text-blue-600 animate-spin", size: 80 }),
+                        React.createElement('div', {}, [
+                            React.createElement('h2', { className: "text-3xl font-black text-slate-900 tracking-tighter" }, "Processando"),
+                            React.createElement('p', { className: "text-blue-500 font-black mt-2 uppercase text-xs tracking-[0.2em]" }, processingState.step)
+                        ]),
+                        React.createElement('div', { className: "w-full bg-slate-100 h-6 rounded-full overflow-hidden border-4 border-slate-50 shadow-inner" }, [
+                            React.createElement('div', { 
+                                className: "h-full progress-shimmer rounded-full transition-all duration-700", 
+                                style: { width: `${processingState.progress}%` }
+                            })
+                        ]),
+                        React.createElement('p', { className: "text-slate-400 font-black text-2xl" }, `${processingState.progress}%`)
+                    ])
+                ]),
+
+                // DASHBOARD
+                React.createElement('div', { key: 'header-row', className: "grid grid-cols-1 xl:grid-cols-5 gap-6" }, [
+                    React.createElement('div', { className: "xl:col-span-1 bg-slate-950 p-8 rounded-[2.5rem] text-white shadow-2xl flex flex-col justify-between border-b-4 border-blue-600" }, [
+                        React.createElement('div', { className: "flex justify-between items-start" }, [
+                            React.createElement('div', {}, [
+                                React.createElement('h1', { className: "text-2xl font-black tracking-tighter leading-none" }, "GESTOR FIS"),
+                                React.createElement('p', { className: "text-blue-400 text-[9px] font-black uppercase tracking-widest mt-2" }, "Inspeção de Saúde")
+                            ]),
+                            React.createElement(ClipboardCheck, { size: 40, className: "text-blue-500" })
+                        ]),
+                        React.createElement('div', { className: "mt-8" }, [
+                            React.createElement('label', { className: "text-[10px] font-black text-slate-500 uppercase block mb-2 px-1" }, "Data do Exame"),
+                            React.createElement('div', { className: "flex items-center gap-3 bg-white/10 p-4 rounded-3xl border border-white/10 hover:bg-white/15 transition-all" }, [
+                                React.createElement(Calendar, { size: 18, className: "text-blue-400" }),
+                                React.createElement('input', {
+                                    type: "date",
+                                    value: filterDate,
+                                    onChange: (e) => setFilterDate(e.target.value),
+                                    className: "bg-transparent border-none text-sm font-black text-white w-full outline-none focus:ring-0 uppercase cursor-pointer"
+                                })
+                            ])
+                        ])
+                    ]),
+                    React.createElement('div', { className: "xl:col-span-4 grid grid-cols-2 md:grid-cols-4 gap-4" }, [
+                        React.createElement(StatBox, { label: "Fichas Carregadas", value: stats.totalFichas, sub: `${stats.impressas} Impressas`, icon: React.createElement(History, { size: 32 }), color: "bg-white text-slate-950" }),
+                        React.createElement(StatBox, { label: "Total Únicos", value: stats.uniquePessoas, sub: "Inspecionandos", icon: React.createElement(UserCheck, { size: 32 }), color: "bg-white text-slate-950" }),
+                        React.createElement(StatBox, { label: "Efetivo Masculino", value: stats.homens, sub: "Masculino", icon: React.createElement(Shield, { size: 32 }), color: "bg-white text-blue-700" }),
+                        React.createElement(StatBox, { label: "Efetivo Feminino", value: stats.mulheres, sub: "Feminino", icon: React.createElement(User, { size: 32 }), color: "bg-white text-rose-600" })
+                    ])
+                ]),
+
+                // CONTROLES
+                React.createElement('div', { key: 'controls-row', className: "bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-200 flex flex-wrap items-center gap-4" }, [
+                    React.createElement('div', { className: "relative flex-[3] min-w-[300px]" }, [
+                        React.createElement(Search, { size: 20, className: "absolute left-6 top-1/2 -translate-y-1/2 text-slate-400" }),
+                        React.createElement('input', {
+                            type: "text",
+                            placeholder: "Nome, CPF ou SARAM...",
+                            className: "w-full pl-16 pr-8 py-5 bg-slate-50 rounded-[1.5rem] border-none focus:ring-4 focus:ring-blue-100 font-bold text-base transition-all",
+                            value: searchTerm,
+                            onChange: (e) => setSearchTerm(e.target.value)
+                        })
+                    ]),
+                    React.createElement('div', { className: "relative flex-[1] min-w-[180px]" }, [
+                        React.createElement(MapPin, { size: 20, className: "absolute left-6 top-1/2 -translate-y-1/2 text-slate-400" }),
+                        React.createElement('input', {
+                            type: "text",
+                            placeholder: "Filtrar Organização...",
+                            className: "w-full pl-16 pr-8 py-5 bg-slate-50 rounded-[1.5rem] border-none focus:ring-4 focus:ring-blue-100 font-bold text-base transition-all",
+                            value: omSearchTerm,
+                            onChange: (e) => setOmSearchTerm(e.target.value)
+                        })
+                    ]),
+                    React.createElement('div', { className: "flex items-center gap-6 ml-auto pl-4" }, [
+                        React.createElement('div', { className: "text-right" }, [
+                            React.createElement('p', { className: "text-[9px] font-black text-slate-400 uppercase tracking-widest" }, "Sincronização"),
+                            React.createElement('p', { className: "text-xs font-black text-slate-700" }, lastUpdate)
+                        ]),
+                        React.createElement('button', {
+                            onClick: () => handleGenerate(),
+                            disabled: selectedIds.size === 0 || processingState.active,
+                            className: "px-12 py-5 bg-blue-600 text-white rounded-[1.5rem] font-black shadow-xl shadow-blue-200 hover:bg-blue-700 disabled:opacity-50 transition-all flex items-center gap-3 uppercase text-sm"
+                        }, [
+                            React.createElement(Printer, { size: 20 }),
+                            `Imprimir Selecionados (${selectedIds.size})`
+                        ])
+                    ])
+                ]),
+
+                // NOTIFICAÇÕES
+                status.type && React.createElement('div', { key: 'status-row', className: `p-6 rounded-[2rem] border-2 flex items-center justify-between animate-in fade-in slide-in-from-top-6 ${status.type === 'success' ? 'bg-emerald-50 border-emerald-100 text-emerald-900' : 'bg-rose-50 border-rose-100 text-rose-900'}` }, [
+                    React.createElement('div', { className: "flex items-center gap-5 font-black text-lg" }, [
+                        status.type === 'success' ? React.createElement(CheckCircle2, { className: "text-emerald-600", size: 28 }) : React.createElement(AlertCircle, { className: "text-rose-600", size: 28 }),
+                        status.message
+                    ]),
+                    status.printUrl && React.createElement('button', {
+                        onClick: () => window.open(status.printUrl, '_blank'),
+                        className: "px-10 py-4 bg-slate-900 text-white rounded-[1.2rem] text-xs font-black uppercase flex items-center gap-3 hover:bg-black transition-all shadow-xl"
+                    }, [React.createElement(Download, { size: 18 }), "Abrir PDF (FICHAS)"])
+                ]),
+
+                // TABELA
+                React.createElement('div', { key: 'table-container', className: "table-wrapper shadow-xl border border-slate-200" }, 
+                    React.createElement('table', { className: "w-full text-left" }, [
+                        React.createElement('thead', {}, headerRow),
+                        React.createElement('tbody', { className: "divide-y divide-slate-100" }, tableBody)
+                    ])
+                )
+            ]);
+        };
+
+        const StatBox = ({ label, value, sub, icon, color }) => React.createElement('div', { className: `${color} p-8 rounded-[2.5rem] shadow-sm border border-slate-200 flex items-center gap-8` }, [
+            React.createElement('div', { className: "p-6 bg-slate-50 rounded-[2rem]" }, icon),
+            React.createElement('div', {}, [
+                React.createElement('p', { className: "text-[10px] font-black uppercase text-slate-400 tracking-widest mb-2" }, label),
+                React.createElement('p', { className: "text-4xl font-black tracking-tighter leading-none" }, value),
+                React.createElement('p', { className: "text-[10px] font-bold text-slate-400 uppercase mt-3" }, sub)
+            ])
+        ]);
+
+        createRoot(document.getElementById('root')).render(React.createElement(App));
+    </script>
 </body>
 </html>
